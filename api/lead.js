@@ -1,41 +1,53 @@
 // /api/lead.js
 
-import crypto from 'crypto';
-import { buffer } from 'micro';
-import sgMail from '@sendgrid/mail';
-
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-
-export const config = {
-  api: {
-    bodyParser: false, // IMPORTANT: we need raw body for HMAC verification
-  },
-};
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST allowed' });
+    return res.status(405).json({ error: 'Only POST requests are allowed' });
   }
 
-  const rawBody = (await buffer(req)).toString('utf8');
-  const signature = req.headers['elevenlabs-signature'];
-  const secret = process.env.ELEVENLABS_HMAC_SECRET;
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET; // ✅ This matches your .env file
+  if (!secret) {
+    console.error('ELEVENLABS_WEBHOOK_SECRET is undefined');
+    return res.status(500).json({ error: 'Server misconfiguration: missing HMAC secret' });
+  }
 
-  const expectedSignature = crypto
-    .createHmac('sha256', secret)
-    .update(rawBody)
-    .digest('hex');
+  const signature = req.headers['elevenlabs-signature'];
+  if (!signature) {
+    return res.status(401).json({ error: 'Missing signature' });
+  }
+
+  const crypto = await import('crypto');
+
+  let expectedSignature;
+  try {
+    expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(JSON.stringify(req.body))
+      .digest('hex');
+  } catch (err) {
+    console.error('HMAC computation error:', err);
+    return res.status(500).json({ error: 'Failed to verify signature' });
+  }
 
   if (signature !== expectedSignature) {
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
-  const body = JSON.parse(rawBody);
-  const { name, email, phone, company, number_of_employees, industry_type } = body;
+  const {
+    name,
+    email,
+    phone,
+    company,
+    number_of_employees,
+    industry_type,
+  } = req.body;
+
+  const sgMail = (await import('@sendgrid/mail')).default;
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
   const msg = {
-    to: 'skbad911@gmail.com',
-    from: 'noreply@yourdomain.com', // must match your verified sender domain in SendGrid
+    to: process.env.NOTIFICATION_EMAIL,
+    from: process.env.FROM_EMAIL,
     subject: 'New Lead Captured - Palgeo',
     html: `
       <h2>New Lead from Palgeo</h2>
@@ -50,9 +62,9 @@ export default async function handler(req, res) {
 
   try {
     await sgMail.send(msg);
-    return res.status(200).json({ message: 'Email sent' });
+    return res.status(200).json({ message: 'Email sent successfully' });
   } catch (error) {
     console.error('SendGrid error:', error.response?.body || error.message);
-    return res.status(500).json({ error: 'Email failed' });
+    return res.status(500).json({ error: 'Failed to send email' });
   }
 }
