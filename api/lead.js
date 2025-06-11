@@ -229,8 +229,15 @@ export const config = {
   },
 };
 
-// Initialize Resend
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// 🔒 HMAC Verification
+function verifyHmacSignature(signature, rawBody, secret) {
+  const hmac = crypto.createHmac('sha256', secret);
+  hmac.update(rawBody);
+  const digest = hmac.digest('hex');
+  return signature === digest;
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -239,12 +246,17 @@ export default async function handler(req, res) {
 
   const buf = await buffer(req);
   const rawBody = buf.toString('utf8');
-  
   const signature = req.headers['elevenlabs-signature'];
-  
+
   if (!signature) {
     console.log('No signature found, treating as direct API call');
     return handleDirectApiCall(rawBody, res);
+  }
+
+  const secret = process.env.ELEVENLABS_SECRET;
+  if (!verifyHmacSignature(signature, rawBody, secret)) {
+    console.error('Invalid HMAC signature');
+    return res.status(401).json({ error: 'Invalid signature' });
   }
 
   return handleElevenLabsWebhook(rawBody, res);
@@ -256,30 +268,18 @@ async function handleElevenLabsWebhook(rawBody, res) {
     body = JSON.parse(rawBody);
     console.log('Received ElevenLabs webhook:', JSON.stringify(body, null, 2));
   } catch (err) {
-    console.error('JSON parse error:', err);
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
   if (body.type === 'post_call_transcription') {
     const leadData = extractLeadFromTranscript(body.data);
-    
     if (leadData) {
       const success = await sendLeadEmail(leadData, body.data);
-      if (success) {
-        return res.status(200).json({ 
-          message: 'Lead notification sent successfully',
-          type: body.type,
-          conversation_id: body.data.conversation_id,
-          leadData
-        });
-      } else {
-        return res.status(500).json({ error: 'Failed to send email' });
-      }
+      return success
+        ? res.status(200).json({ message: 'Lead email sent', leadData })
+        : res.status(500).json({ error: 'Failed to send email' });
     } else {
-      return res.status(200).json({ 
-        message: 'Webhook received but no lead data found',
-        type: body.type 
-      });
+      return res.status(200).json({ message: 'No lead found in transcript' });
     }
   }
 
@@ -291,52 +291,40 @@ async function handleDirectApiCall(rawBody, res) {
   try {
     body = JSON.parse(rawBody);
   } catch (err) {
-    console.error('JSON parse error:', err);
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
   const { name, email, phone, company, number_of_employees, industry_type } = body;
-
   if (name || email) {
     const leadData = { name, email, phone, company, number_of_employees, industry_type };
     const success = await sendLeadEmail(leadData);
-    
-    if (success) {
-      return res.status(200).json({ message: 'Lead captured successfully', success: true });
-    } else {
-      return res.status(500).json({ error: 'Failed to send email' });
-    }
-  } else {
-    return res.status(400).json({ 
-      error: 'Missing required lead data (name or email)',
-      received_data: body
-    });
+    return success
+      ? res.status(200).json({ message: 'Lead email sent (API)', leadData })
+      : res.status(500).json({ error: 'Failed to send email' });
   }
+
+  return res.status(400).json({ error: 'Missing required lead data' });
 }
 
 function extractLeadFromTranscript(data) {
-  const dataCollection = data.analysis?.data_collection_results || {};
-  
-  let leadData = {
-    name: dataCollection.name || dataCollection.full_name || dataCollection.customer_name,
-    email: dataCollection.email || dataCollection.email_address,
-    phone: dataCollection.phone || dataCollection.phone_number,
-    company: dataCollection.company || dataCollection.company_name,
-    number_of_employees: dataCollection.number_of_employees || dataCollection.employees,
-    industry_type: dataCollection.industry_type || dataCollection.industry
+  const results = data.analysis?.data_collection_results || {};
+  let lead = {
+    name: results.name || results.full_name || results.customer_name,
+    email: results.email || results.email_address,
+    phone: results.phone || results.phone_number,
+    company: results.company || results.company_name,
+    number_of_employees: results.number_of_employees || results.employees,
+    industry_type: results.industry_type || results.industry
   };
 
-  if (!leadData.name && !leadData.email && data.transcript) {
-    console.log('Parsing lead data from transcript...');
-    
+  if (!lead.name && !lead.email && data.transcript) {
     for (const entry of data.transcript) {
-      if (entry.tool_calls && entry.tool_calls.length > 0) {
-        for (const toolCall of entry.tool_calls) {
-          if (toolCall.tool_name === 'Send_Lead_to_Palgeo' && toolCall.params_as_json) {
+      if (entry.tool_calls?.length) {
+        for (const call of entry.tool_calls) {
+          if (call.tool_name === 'Send_Lead_to_Palgeo' && call.params_as_json) {
             try {
-              const params = JSON.parse(toolCall.params_as_json);
-              console.log('Found lead data in tool call:', params);
-              leadData = {
+              const params = JSON.parse(call.params_as_json);
+              return {
                 name: params.name,
                 email: params.email,
                 phone: params.phone,
@@ -344,125 +332,57 @@ function extractLeadFromTranscript(data) {
                 number_of_employees: params.number_of_employees,
                 industry_type: params.industry_type
               };
-              break;
-            } catch (e) {
-              console.error('Error parsing tool call params:', e);
-            }
+            } catch {}
           }
         }
       }
-      
+
       if (entry.role === 'user' && entry.message) {
-        const message = entry.message;
-        
-        const emailMatch = message.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-        if (emailMatch && !leadData.email) leadData.email = emailMatch[1];
-        
-        const phoneMatch = message.match(/(\d{10,})/);
-        if (phoneMatch && !leadData.phone) leadData.phone = phoneMatch[1];
-        
-        const companyMatch = message.match(/company\s*[-:]\s*(\w+)/i);
-        if (companyMatch && !leadData.company) leadData.company = companyMatch[1];
-        
-        const employeesMatch = message.match(/employees\s*[-:]\s*(\d+)/i);
-        if (employeesMatch && !leadData.number_of_employees) leadData.number_of_employees = employeesMatch[1];
-        
-        const industryMatch = message.match(/industry\s*[-:]\s*(\w+)/i);
-        if (industryMatch && !leadData.industry_type) leadData.industry_type = industryMatch[1];
-        
-        if (!leadData.name && !message.toLowerCase().includes('demo') && !message.toLowerCase().includes('want')) {
-          const words = message.split(' ');
-          for (const word of words) {
-            if (word.length > 2 && !word.includes('@') && !word.match(/^\d+$/) && 
-                !['demo', 'want', 'company', 'employees', 'industry'].includes(word.toLowerCase())) {
-              leadData.name = word;
-              break;
-            }
-          }
+        const msg = entry.message;
+        lead.email = lead.email || msg.match(/[\w.-]+@[\w.-]+\.\w+/)?.[0];
+        lead.phone = lead.phone || msg.match(/\d{10,}/)?.[0];
+        lead.company = lead.company || msg.match(/company\s*[-:]\s*(\w+)/i)?.[1];
+        lead.number_of_employees = lead.number_of_employees || msg.match(/employees\s*[-:]\s*(\d+)/i)?.[1];
+        lead.industry_type = lead.industry_type || msg.match(/industry\s*[-:]\s*(\w+)/i)?.[1];
+
+        if (!lead.name) {
+          const guess = msg.split(' ').find(w => w.length > 2 && !w.includes('@') && isNaN(w));
+          if (guess) lead.name = guess;
         }
       }
     }
   }
 
-  if (leadData.name || leadData.email) {
-    console.log('Extracted lead data:', leadData);
-    return leadData;
-  }
-
-  return null;
+  return lead.name || lead.email ? lead : null;
 }
 
-async function sendLeadEmail(leadData, callData = null) {
-  if (!process.env.RESEND_API_KEY) {
-    console.error('Missing RESEND_API_KEY');
-    return false;
-  }
-
+async function sendLeadEmail(lead, callData = null) {
   try {
     const { data, error } = await resend.emails.send({
-      from: 'Palgeo Lead Bot <leads@yourdomain.com>', // Use your domain
-      to: [process.env.NOTIFICATION_EMAIL || 'skbad911@gmail.com'],
-      subject: '🎯 New Lead from ElevenLabs Call - Palgeo',
+      from: 'Palgeo Lead Bot <skbad911@gmail.com>',
+      to: [process.env.NOTIFICATION_EMAIL],
+      subject: '🎯 New Lead from ElevenLabs',
       html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f8f9fa; padding: 20px;">
-          <div style="background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-            <h1 style="color: #2c3e50; text-align: center; margin-bottom: 30px;">
-              🎯 New Lead Alert!
-            </h1>
-            
-            ${callData ? `
-              <div style="background-color: #e3f2fd; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #2196f3;">
-                <h2 style="color: #1976d2; margin-top: 0; margin-bottom: 15px;">📞 Call Information</h2>
-                <p style="margin: 8px 0;"><strong>Date:</strong> ${new Date(callData.metadata?.start_time_unix_secs * 1000).toLocaleString()}</p>
-                <p style="margin: 8px 0;"><strong>Duration:</strong> ${callData.metadata?.call_duration_secs || 'Unknown'} seconds</p>
-                <p style="margin: 8px 0;"><strong>Status:</strong> <span style="color: #4caf50; font-weight: bold;">${callData.analysis?.call_successful || 'Unknown'}</span></p>
-              </div>
-            ` : ''}
-            
-            <div style="background-color: #e8f5e8; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #4caf50;">
-              <h2 style="color: #2e7d32; margin-top: 0; margin-bottom: 15px;">👤 Lead Details</h2>
-              <div style="display: grid; gap: 10px;">
-                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: white; border-radius: 4px;">
-                  <strong>Name:</strong> <span>${leadData.name || '❌ Not provided'}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: white; border-radius: 4px;">
-                  <strong>Email:</strong> <span style="color: #1976d2;">${leadData.email || '❌ Not provided'}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: white; border-radius: 4px;">
-                  <strong>Phone:</strong> <span>${leadData.phone || '❌ Not provided'}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: white; border-radius: 4px;">
-                  <strong>Company:</strong> <span>${leadData.company || '❌ Not provided'}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: white; border-radius: 4px;">
-                  <strong>Employees:</strong> <span>${leadData.number_of_employees || '❌ Not provided'}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 8px; background-color: white; border-radius: 4px;">
-                  <strong>Industry:</strong> <span>${leadData.industry_type || '❌ Not provided'}</span>
-                </div>
-              </div>
-            </div>
-            
-            ${callData ? `
-              <div style="background-color: #fff3e0; padding: 20px; border-radius: 8px; margin-bottom: 25px; border-left: 4px solid #ff9800;">
-                <h2 style="color: #f57c00; margin-top: 0; margin-bottom: 15px;">📝 Call Summary</h2>
-                <p style="line-height: 1.6; color: #424242;">${callData.analysis?.transcript_summary || 'No summary available'}</p>
-              </div>
-            ` : ''}
-            
-            <div style="text-align: center; padding: 20px; background-color: #f5f5f5; border-radius: 8px;">
-              <p style="margin: 0; color: #666;">
-                <small>🕒 Received: ${new Date().toLocaleString()}</small>
-              </p>
-              ${callData ? `
-                <p style="margin: 5px 0 0 0; color: #666;">
-                  <small>Conversation ID: ${callData.conversation_id}</small>
-                </p>
-              ` : ''}
-            </div>
-          </div>
+        <div style="font-family: Arial; padding: 20px;">
+          <h2>🎯 New Lead Received</h2>
+          <ul>
+            <li><b>Name:</b> ${lead.name || 'N/A'}</li>
+            <li><b>Email:</b> ${lead.email || 'N/A'}</li>
+            <li><b>Phone:</b> ${lead.phone || 'N/A'}</li>
+            <li><b>Company:</b> ${lead.company || 'N/A'}</li>
+            <li><b>Employees:</b> ${lead.number_of_employees || 'N/A'}</li>
+            <li><b>Industry:</b> ${lead.industry_type || 'N/A'}</li>
+          </ul>
+          ${callData ? `
+            <hr>
+            <h3>Call Summary</h3>
+            <p><b>Time:</b> ${new Date(callData.metadata?.start_time_unix_secs * 1000).toLocaleString()}</p>
+            <p><b>Duration:</b> ${callData.metadata?.call_duration_secs || 'N/A'} seconds</p>
+            <p><b>Transcript Summary:</b><br>${callData.analysis?.transcript_summary || 'No summary'}</p>
+            <p><b>Conversation ID:</b> ${callData.conversation_id}</p>
+          ` : ''}
         </div>
-      `,
+      `
     });
 
     if (error) {
@@ -470,10 +390,9 @@ async function sendLeadEmail(leadData, callData = null) {
       return false;
     }
 
-    console.log('Lead email sent successfully:', data);
     return true;
-  } catch (error) {
-    console.error('Email sending error:', error);
+  } catch (err) {
+    console.error('sendLeadEmail error:', err);
     return false;
   }
 }
