@@ -27,13 +27,32 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Missing signature header' });
   }
 
+  // Create expected signature
   const expectedSignature = crypto
     .createHmac('sha256', secret)
     .update(rawBody)
     .digest('hex');
 
-  if (signature !== expectedSignature) {
-    console.error('Signature mismatch');
+  // Handle different signature formats (with or without sha256= prefix)
+  const receivedSig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+  const expectedSig = expectedSignature;
+
+  // Use timing-safe comparison to prevent timing attacks
+  let isValid = false;
+  try {
+    isValid = crypto.timingSafeEqual(
+      Buffer.from(receivedSig, 'hex'), 
+      Buffer.from(expectedSig, 'hex')
+    );
+  } catch (error) {
+    console.error('Signature comparison error:', error);
+    return res.status(401).json({ error: 'Invalid signature format' });
+  }
+
+  if (!isValid) {
+    console.error('Signature verification failed');
+    console.error('Received:', receivedSig);
+    console.error('Expected:', expectedSig);
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
