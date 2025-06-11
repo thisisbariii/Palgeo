@@ -33,24 +33,50 @@ export default async function handler(req, res) {
     .update(rawBody)
     .digest('hex');
 
-  // Handle different signature formats (with or without sha256= prefix)
-  const receivedSig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-  const expectedSig = expectedSignature;
+  // Parse ElevenLabs signature format: t=timestamp,v0=signature
+  const sigParts = signature.split(',');
+  let timestamp = null;
+  let receivedSig = null;
 
-  // Check if signatures have the same length before comparison
-  if (receivedSig.length !== expectedSig.length) {
-    console.error('Signature length mismatch');
-    console.error('Received length:', receivedSig.length, 'signature:', receivedSig);
-    console.error('Expected length:', expectedSig.length, 'signature:', expectedSig);
-    return res.status(401).json({ error: 'Invalid signature' });
+  for (const part of sigParts) {
+    const [key, value] = part.split('=');
+    if (key === 't') {
+      timestamp = value;
+    } else if (key === 'v0') {
+      receivedSig = value;
+    }
   }
 
-  // Simple string comparison (signatures are hex strings)
+  if (!timestamp || !receivedSig) {
+    console.error('Invalid signature format - missing timestamp or signature');
+    return res.status(401).json({ error: 'Invalid signature format' });
+  }
+
+  // Create the signed payload: timestamp + . + raw body
+  const signedPayload = timestamp + '.' + rawBody;
+
+  // Generate expected signature using the signed payload
+  const expectedSig = crypto
+    .createHmac('sha256', secret)
+    .update(signedPayload)
+    .digest('hex');
+
+  // Compare signatures
   if (receivedSig !== expectedSig) {
     console.error('Signature verification failed');
     console.error('Received:', receivedSig);
     console.error('Expected:', expectedSig);
+    console.error('Timestamp:', timestamp);
+    console.error('Signed payload:', signedPayload.substring(0, 100) + '...');
     return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  // Optional: Check timestamp to prevent replay attacks (signature older than 5 minutes)
+  const currentTime = Math.floor(Date.now() / 1000);
+  const sigTimestamp = parseInt(timestamp);
+  if (currentTime - sigTimestamp > 300) { // 5 minutes
+    console.error('Signature too old');
+    return res.status(401).json({ error: 'Signature expired' });
   }
 
   let body;
