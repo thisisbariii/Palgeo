@@ -84,41 +84,121 @@ export default async function handler(req, res) {
   }
 
   // Log the extracted fields for debugging
-  const {
-    name,
-    email,
-    phone,
-    company,
-    number_of_employees,
-    industry_type,
-  } = body;
+  console.log('Webhook type:', body.type);
+  
+  // Handle different webhook types
+  if (body.type === 'post_call_transcription') {
+    // Extract lead data from ElevenLabs conversation
+    const { data } = body;
+    const { analysis, metadata } = data;
+    
+    // Try to extract lead info from data_collection_results
+    const dataCollection = analysis?.data_collection_results || {};
+    console.log('Data collection results:', dataCollection);
+    
+    // Extract lead information (adjust field names based on your ElevenLabs agent configuration)
+    const name = dataCollection.name || dataCollection.full_name || dataCollection.customer_name;
+    const email = dataCollection.email || dataCollection.email_address;
+    const phone = dataCollection.phone || dataCollection.phone_number;
+    const company = dataCollection.company || dataCollection.company_name;
+    const number_of_employees = dataCollection.number_of_employees || dataCollection.employees;
+    const industry_type = dataCollection.industry_type || dataCollection.industry;
+    
+    console.log('Extracted lead data:', {
+      name, email, phone, company, number_of_employees, industry_type
+    });
+    
+    // If no data in data_collection_results, try to parse from transcript summary
+    if (!name && !email) {
+      console.log('No structured data found, checking transcript summary...');
+      const transcriptSummary = analysis?.transcript_summary || '';
+      console.log('Transcript summary:', transcriptSummary);
+      
+      // You might need to implement text parsing here if the data isn't structured
+      // For now, we'll send the available information
+    }
+    
+    // Send email with available data
+    if (name || email || transcriptSummary) {
+      const msg = {
+        to: process.env.NOTIFICATION_EMAIL,
+        from: process.env.FROM_EMAIL,
+        subject: 'New Lead from ElevenLabs Call - Palgeo',
+        html: `
+          <h2>New Lead from ElevenLabs Call</h2>
+          <p><strong>Call Date:</strong> ${new Date(body.event_timestamp * 1000).toLocaleString()}</p>
+          <p><strong>Call Duration:</strong> ${metadata?.call_duration_secs || 'Unknown'} seconds</p>
+          <p><strong>Call Status:</strong> ${analysis?.call_successful || 'Unknown'}</p>
+          <hr>
+          <h3>Lead Information:</h3>
+          <p><strong>Name:</strong> ${name || 'Not provided'}</p>
+          <p><strong>Email:</strong> ${email || 'Not provided'}</p>
+          <p><strong>Phone:</strong> ${phone || 'Not provided'}</p>
+          <p><strong>Company:</strong> ${company || 'Not provided'}</p>
+          <p><strong>Employees:</strong> ${number_of_employees || 'Not provided'}</p>
+          <p><strong>Industry:</strong> ${industry_type || 'Not provided'}</p>
+          <hr>
+          <h3>Call Summary:</h3>
+          <p>${analysis?.transcript_summary || 'No summary available'}</p>
+          <hr>
+          <p><strong>Conversation ID:</strong> ${data.conversation_id}</p>
+          <p><strong>Agent ID:</strong> ${data.agent_id}</p>
+        `,
+      };
 
-  console.log('Extracted fields:', {
-    name, email, phone, company, number_of_employees, industry_type
-  });
+      try {
+        await sgMail.send(msg);
+        return res.status(200).json({ 
+          message: 'Lead notification sent successfully',
+          type: body.type,
+          conversation_id: data.conversation_id
+        });
+      } catch (error) {
+        console.error('SendGrid error:', error.response?.body || error.message);
+        return res.status(500).json({ error: 'Failed to send email' });
+      }
+    } else {
+      return res.status(200).json({ 
+        message: 'Webhook received but no lead data found',
+        type: body.type 
+      });
+    }
+  } else {
+    // Handle other webhook types or legacy format
+    const {
+      name,
+      email,
+      phone,
+      company,
+      number_of_employees,
+      industry_type,
+    } = body;
 
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    console.log('Extracted fields:', {
+      name, email, phone, company, number_of_employees, industry_type
+    });
 
-  const msg = {
-    to: process.env.NOTIFICATION_EMAIL,
-    from: process.env.FROM_EMAIL,
-    subject: 'New Lead Captured - Palgeo',
-    html: `
-      <h2>New Lead from Palgeo</h2>
-      <p><strong>Name:</strong> ${name}</p>
-      <p><strong>Email:</strong> ${email}</p>
-      <p><strong>Phone:</strong> ${phone}</p>
-      <p><strong>Company:</strong> ${company}</p>
-      <p><strong>Employees:</strong> ${number_of_employees}</p>
-      <p><strong>Industry:</strong> ${industry_type}</p>
-    `,
-  };
+    const msg = {
+      to: process.env.NOTIFICATION_EMAIL,
+      from: process.env.FROM_EMAIL,
+      subject: 'New Lead Captured - Palgeo',
+      html: `
+        <h2>New Lead from Palgeo</h2>
+        <p><strong>Name:</strong> ${name}</p>
+        <p><strong>Email:</strong> ${email}</p>
+        <p><strong>Phone:</strong> ${phone}</p>
+        <p><strong>Company:</strong> ${company}</p>
+        <p><strong>Employees:</strong> ${number_of_employees}</p>
+        <p><strong>Industry:</strong> ${industry_type}</p>
+      `,
+    };
 
-  try {
-    await sgMail.send(msg);
-    return res.status(200).json({ message: 'Email sent successfully' });
-  } catch (error) {
-    console.error('SendGrid error:', error.response?.body || error.message);
-    return res.status(500).json({ error: 'Failed to send email' });
+    try {
+      await sgMail.send(msg);
+      return res.status(200).json({ message: 'Email sent successfully' });
+    } catch (error) {
+      console.error('SendGrid error:', error.response?.body || error.message);
+      return res.status(500).json({ error: 'Failed to send email' });
+    }
   }
 }
