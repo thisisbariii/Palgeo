@@ -1,36 +1,47 @@
-// /api/lead.js
+import { buffer } from 'micro';
+import crypto from 'crypto';
+import sgMail from '@sendgrid/mail';
+
+export const config = {
+  api: {
+    bodyParser: false, // Required to get raw body for HMAC
+  },
+};
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST requests are allowed' });
+    return res.status(405).json({ error: 'Only POST requests allowed' });
   }
 
-  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET; // ✅ This matches your .env file
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
   if (!secret) {
-    console.error('ELEVENLABS_WEBHOOK_SECRET is undefined');
-    return res.status(500).json({ error: 'Server misconfiguration: missing HMAC secret' });
+    console.error('Missing ELEVENLABS_WEBHOOK_SECRET');
+    return res.status(500).json({ error: 'Server misconfiguration' });
   }
 
+  const buf = await buffer(req);
+  const rawBody = buf.toString('utf8');
   const signature = req.headers['elevenlabs-signature'];
+
   if (!signature) {
-    return res.status(401).json({ error: 'Missing signature' });
+    return res.status(401).json({ error: 'Missing signature header' });
   }
 
-  const crypto = await import('crypto');
-
-  let expectedSignature;
-  try {
-    expectedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(JSON.stringify(req.body))
-      .digest('hex');
-  } catch (err) {
-    console.error('HMAC computation error:', err);
-    return res.status(500).json({ error: 'Failed to verify signature' });
-  }
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('hex');
 
   if (signature !== expectedSignature) {
+    console.error('Signature mismatch');
     return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  let body;
+  try {
+    body = JSON.parse(rawBody);
+  } catch (err) {
+    return res.status(400).json({ error: 'Invalid JSON' });
   }
 
   const {
@@ -40,9 +51,8 @@ export default async function handler(req, res) {
     company,
     number_of_employees,
     industry_type,
-  } = req.body;
+  } = body;
 
-  const sgMail = (await import('@sendgrid/mail')).default;
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
   const msg = {
