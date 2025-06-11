@@ -453,7 +453,7 @@ function App() {
 
       {/* ElevenLabs ConvAI Widget - Floating Icon */}
       {widgetLoaded && (
-        <elevenlabs-convai agent-id="agent_01jx9y0yecfdmt7nggvrrc9n16"></elevenlabs-convai>
+        <elevenlabs-convai agent-id="agent_01jxf1ts2qfjcryfmvvzzadpwn"></elevenlabs-convai>
       )}
     </div>
   );
