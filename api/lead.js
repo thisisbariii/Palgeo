@@ -219,9 +219,186 @@
 //     }
 //   }
 
+// import { buffer } from 'micro';
+// import crypto from 'crypto';
+// import { Resend } from 'resend';
+
+// export const config = {
+//   api: {
+//     bodyParser: false,
+//   },
+// };
+
+// const resend = new Resend(process.env.RESEND_API_KEY);
+
+// // 🔒 HMAC Verification
+// function verifyHmacSignature(signature, rawBody, secret) {
+//   const hmac = crypto.createHmac('sha256', secret);
+//   hmac.update(rawBody);
+//   const digest = hmac.digest('hex');
+//   return signature === digest;
+// }
+
+// export default async function handler(req, res) {
+//   if (req.method !== 'POST') {
+//     return res.status(405).json({ error: 'Only POST requests allowed' });
+//   }
+
+//   const buf = await buffer(req);
+//   const rawBody = buf.toString('utf8');
+//   const signature = req.headers['elevenlabs-signature'];
+
+//   if (!signature) {
+//     console.log('No signature found, treating as direct API call');
+//     return handleDirectApiCall(rawBody, res);
+//   }
+
+//   const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
+//   if (!verifyHmacSignature(signature, rawBody, secret)) {
+//     console.error('Invalid HMAC signature');
+//     return res.status(401).json({ error: 'Invalid signature' });
+//   }
+
+//   return handleElevenLabsWebhook(rawBody, res);
+// }
+
+// async function handleElevenLabsWebhook(rawBody, res) {
+//   let body;
+//   try {
+//     body = JSON.parse(rawBody);
+//     console.log('Received ElevenLabs webhook:', JSON.stringify(body, null, 2));
+//   } catch (err) {
+//     return res.status(400).json({ error: 'Invalid JSON' });
+//   }
+
+//   if (body.type === 'post_call_transcription') {
+//     const leadData = extractLeadFromTranscript(body.data);
+//     if (leadData) {
+//       const success = await sendLeadEmail(leadData, body.data);
+//       return success
+//         ? res.status(200).json({ message: 'Lead email sent', leadData })
+//         : res.status(500).json({ error: 'Failed to send email' });
+//     } else {
+//       return res.status(200).json({ message: 'No lead found in transcript' });
+//     }
+//   }
+
+//   return res.status(200).json({ message: 'Webhook received' });
+// }
+
+// async function handleDirectApiCall(rawBody, res) {
+//   let body;
+//   try {
+//     body = JSON.parse(rawBody);
+//   } catch (err) {
+//     return res.status(400).json({ error: 'Invalid JSON' });
+//   }
+
+//   const { name, email, phone, company, number_of_employees, industry_type } = body;
+//   if (name || email) {
+//     const leadData = { name, email, phone, company, number_of_employees, industry_type };
+//     const success = await sendLeadEmail(leadData);
+//     return success
+//       ? res.status(200).json({ message: 'Lead email sent (API)', leadData })
+//       : res.status(500).json({ error: 'Failed to send email' });
+//   }
+
+//   return res.status(400).json({ error: 'Missing required lead data' });
+// }
+
+// function extractLeadFromTranscript(data) {
+//   const results = data.analysis?.data_collection_results || {};
+//   let lead = {
+//     name: results.name || results.full_name || results.customer_name,
+//     email: results.email || results.email_address,
+//     phone: results.phone || results.phone_number,
+//     company: results.company || results.company_name,
+//     number_of_employees: results.number_of_employees || results.employees,
+//     industry_type: results.industry_type || results.industry
+//   };
+
+//   if (!lead.name && !lead.email && data.transcript) {
+//     for (const entry of data.transcript) {
+//       if (entry.tool_calls?.length) {
+//         for (const call of entry.tool_calls) {
+//           if (call.tool_name === 'Send_Lead_to_Palgeo' && call.params_as_json) {
+//             try {
+//               const params = JSON.parse(call.params_as_json);
+//               return {
+//                 name: params.name,
+//                 email: params.email,
+//                 phone: params.phone,
+//                 company: params.company,
+//                 number_of_employees: params.number_of_employees,
+//                 industry_type: params.industry_type
+//               };
+//             } catch {}
+//           }
+//         }
+//       }
+
+//       if (entry.role === 'user' && entry.message) {
+//         const msg = entry.message;
+//         lead.email = lead.email || msg.match(/[\w.-]+@[\w.-]+\.\w+/)?.[0];
+//         lead.phone = lead.phone || msg.match(/\d{10,}/)?.[0];
+//         lead.company = lead.company || msg.match(/company\s*[-:]\s*(\w+)/i)?.[1];
+//         lead.number_of_employees = lead.number_of_employees || msg.match(/employees\s*[-:]\s*(\d+)/i)?.[1];
+//         lead.industry_type = lead.industry_type || msg.match(/industry\s*[-:]\s*(\w+)/i)?.[1];
+
+//         if (!lead.name) {
+//           const guess = msg.split(' ').find(w => w.length > 2 && !w.includes('@') && isNaN(w));
+//           if (guess) lead.name = guess;
+//         }
+//       }
+//     }
+//   }
+
+//   return lead.name || lead.email ? lead : null;
+// }
+
+// async function sendLeadEmail(lead, callData = null) {
+//   try {
+//     const { data, error } = await resend.emails.send({
+//       from: 'Palgeo Lead Bot <skbad911@gmail.com>',
+//       to: [process.env.NOTIFICATION_EMAIL],
+//       subject: '🎯 New Lead from ElevenLabs',
+//       html: `
+//         <div style="font-family: Arial; padding: 20px;">
+//           <h2>🎯 New Lead Received</h2>
+//           <ul>
+//             <li><b>Name:</b> ${lead.name || 'N/A'}</li>
+//             <li><b>Email:</b> ${lead.email || 'N/A'}</li>
+//             <li><b>Phone:</b> ${lead.phone || 'N/A'}</li>
+//             <li><b>Company:</b> ${lead.company || 'N/A'}</li>
+//             <li><b>Employees:</b> ${lead.number_of_employees || 'N/A'}</li>
+//             <li><b>Industry:</b> ${lead.industry_type || 'N/A'}</li>
+//           </ul>
+//           ${callData ? `
+//             <hr>
+//             <h3>Call Summary</h3>
+//             <p><b>Time:</b> ${new Date(callData.metadata?.start_time_unix_secs * 1000).toLocaleString()}</p>
+//             <p><b>Duration:</b> ${callData.metadata?.call_duration_secs || 'N/A'} seconds</p>
+//             <p><b>Transcript Summary:</b><br>${callData.analysis?.transcript_summary || 'No summary'}</p>
+//             <p><b>Conversation ID:</b> ${callData.conversation_id}</p>
+//           ` : ''}
+//         </div>
+//       `
+//     });
+
+//     if (error) {
+//       console.error('Resend error:', error);
+//       return false;
+//     }
+
+//     return true;
+//   } catch (err) {
+//     console.error('sendLeadEmail error:', err);
+//     return false;
+//   }
+// }
 import { buffer } from 'micro';
 import crypto from 'crypto';
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 
 export const config = {
   api: {
@@ -229,15 +406,21 @@ export const config = {
   },
 };
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-// 🔒 HMAC Verification
+// HMAC check
 function verifyHmacSignature(signature, rawBody, secret) {
   const hmac = crypto.createHmac('sha256', secret);
   hmac.update(rawBody);
-  const digest = hmac.digest('hex');
-  return signature === digest;
+  return hmac.digest('hex') === signature;
 }
+
+// NodeMailer transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -249,13 +432,11 @@ export default async function handler(req, res) {
   const signature = req.headers['elevenlabs-signature'];
 
   if (!signature) {
-    console.log('No signature found, treating as direct API call');
     return handleDirectApiCall(rawBody, res);
   }
 
   const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
   if (!verifyHmacSignature(signature, rawBody, secret)) {
-    console.error('Invalid HMAC signature');
     return res.status(401).json({ error: 'Invalid signature' });
   }
 
@@ -266,8 +447,7 @@ async function handleElevenLabsWebhook(rawBody, res) {
   let body;
   try {
     body = JSON.parse(rawBody);
-    console.log('Received ElevenLabs webhook:', JSON.stringify(body, null, 2));
-  } catch (err) {
+  } catch {
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
@@ -278,19 +458,17 @@ async function handleElevenLabsWebhook(rawBody, res) {
       return success
         ? res.status(200).json({ message: 'Lead email sent', leadData })
         : res.status(500).json({ error: 'Failed to send email' });
-    } else {
-      return res.status(200).json({ message: 'No lead found in transcript' });
     }
   }
 
-  return res.status(200).json({ message: 'Webhook received' });
+  return res.status(200).json({ message: 'No actionable webhook data' });
 }
 
 async function handleDirectApiCall(rawBody, res) {
   let body;
   try {
     body = JSON.parse(rawBody);
-  } catch (err) {
+  } catch {
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
@@ -319,32 +497,10 @@ function extractLeadFromTranscript(data) {
 
   if (!lead.name && !lead.email && data.transcript) {
     for (const entry of data.transcript) {
-      if (entry.tool_calls?.length) {
-        for (const call of entry.tool_calls) {
-          if (call.tool_name === 'Send_Lead_to_Palgeo' && call.params_as_json) {
-            try {
-              const params = JSON.parse(call.params_as_json);
-              return {
-                name: params.name,
-                email: params.email,
-                phone: params.phone,
-                company: params.company,
-                number_of_employees: params.number_of_employees,
-                industry_type: params.industry_type
-              };
-            } catch {}
-          }
-        }
-      }
-
       if (entry.role === 'user' && entry.message) {
         const msg = entry.message;
         lead.email = lead.email || msg.match(/[\w.-]+@[\w.-]+\.\w+/)?.[0];
         lead.phone = lead.phone || msg.match(/\d{10,}/)?.[0];
-        lead.company = lead.company || msg.match(/company\s*[-:]\s*(\w+)/i)?.[1];
-        lead.number_of_employees = lead.number_of_employees || msg.match(/employees\s*[-:]\s*(\d+)/i)?.[1];
-        lead.industry_type = lead.industry_type || msg.match(/industry\s*[-:]\s*(\w+)/i)?.[1];
-
         if (!lead.name) {
           const guess = msg.split(' ').find(w => w.length > 2 && !w.includes('@') && isNaN(w));
           if (guess) lead.name = guess;
@@ -357,42 +513,36 @@ function extractLeadFromTranscript(data) {
 }
 
 async function sendLeadEmail(lead, callData = null) {
+  const html = `
+    <div style="font-family: Arial; padding: 20px;">
+      <h2>🎯 New Lead Received</h2>
+      <ul>
+        <li><b>Name:</b> ${lead.name || 'N/A'}</li>
+        <li><b>Email:</b> ${lead.email || 'N/A'}</li>
+        <li><b>Phone:</b> ${lead.phone || 'N/A'}</li>
+        <li><b>Company:</b> ${lead.company || 'N/A'}</li>
+        <li><b>Employees:</b> ${lead.number_of_employees || 'N/A'}</li>
+        <li><b>Industry:</b> ${lead.industry_type || 'N/A'}</li>
+      </ul>
+      ${callData ? `
+        <hr>
+        <p><b>Call Time:</b> ${new Date(callData.metadata?.start_time_unix_secs * 1000).toLocaleString()}</p>
+        <p><b>Transcript Summary:</b><br>${callData.analysis?.transcript_summary || 'No summary'}</p>
+        <p><b>Conversation ID:</b> ${callData.conversation_id}</p>
+      ` : ''}
+    </div>
+  `;
+
   try {
-    const { data, error } = await resend.emails.send({
-      from: 'Palgeo Lead Bot <skbad911@gmail.com>',
-      to: [process.env.NOTIFICATION_EMAIL],
-      subject: '🎯 New Lead from ElevenLabs',
-      html: `
-        <div style="font-family: Arial; padding: 20px;">
-          <h2>🎯 New Lead Received</h2>
-          <ul>
-            <li><b>Name:</b> ${lead.name || 'N/A'}</li>
-            <li><b>Email:</b> ${lead.email || 'N/A'}</li>
-            <li><b>Phone:</b> ${lead.phone || 'N/A'}</li>
-            <li><b>Company:</b> ${lead.company || 'N/A'}</li>
-            <li><b>Employees:</b> ${lead.number_of_employees || 'N/A'}</li>
-            <li><b>Industry:</b> ${lead.industry_type || 'N/A'}</li>
-          </ul>
-          ${callData ? `
-            <hr>
-            <h3>Call Summary</h3>
-            <p><b>Time:</b> ${new Date(callData.metadata?.start_time_unix_secs * 1000).toLocaleString()}</p>
-            <p><b>Duration:</b> ${callData.metadata?.call_duration_secs || 'N/A'} seconds</p>
-            <p><b>Transcript Summary:</b><br>${callData.analysis?.transcript_summary || 'No summary'}</p>
-            <p><b>Conversation ID:</b> ${callData.conversation_id}</p>
-          ` : ''}
-        </div>
-      `
+    await transporter.sendMail({
+      from: `"Palgeo Lead Bot" <${process.env.SMTP_USER}>`,
+      to: process.env.NOTIFICATION_EMAIL,
+      subject: '🎯 New Lead Captured',
+      html,
     });
-
-    if (error) {
-      console.error('Resend error:', error);
-      return false;
-    }
-
     return true;
   } catch (err) {
-    console.error('sendLeadEmail error:', err);
+    console.error('Failed to send email:', err);
     return false;
   }
 }
