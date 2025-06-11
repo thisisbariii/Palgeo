@@ -27,12 +27,6 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Missing signature header' });
   }
 
-  // Create expected signature
-  const expectedSignature = crypto
-    .createHmac('sha256', secret)
-    .update(rawBody)
-    .digest('hex');
-
   // Parse ElevenLabs signature format: t=timestamp,v0=signature
   const sigParts = signature.split(',');
   let timestamp = null;
@@ -82,10 +76,14 @@ export default async function handler(req, res) {
   let body;
   try {
     body = JSON.parse(rawBody);
+    console.log('Received webhook data:', body); // Debug log
   } catch (err) {
+    console.error('JSON parse error:', err);
+    console.error('Raw body:', rawBody);
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
+  // Log the extracted fields for debugging
   const {
     name,
     email,
@@ -94,6 +92,10 @@ export default async function handler(req, res) {
     number_of_employees,
     industry_type,
   } = body;
+
+  console.log('Extracted fields:', {
+    name, email, phone, company, number_of_employees, industry_type
+  });
 
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
