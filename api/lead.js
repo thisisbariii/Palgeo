@@ -108,18 +108,21 @@ export default async function handler(req, res) {
       name, email, phone, company, number_of_employees, industry_type
     });
     
-    // If no data in data_collection_results, try to parse from transcript summary
+    // If no data in data_collection_results, try to parse from transcript
     if (!name && !email) {
-      console.log('No structured data found, checking transcript summary...');
+      console.log('No structured data found, parsing transcript...');
+      const transcript = data.transcript || [];
+      console.log('Full transcript:', JSON.stringify(transcript, null, 2));
+      
       const transcriptSummary = analysis?.transcript_summary || '';
       console.log('Transcript summary:', transcriptSummary);
       
       // You might need to implement text parsing here if the data isn't structured
-      // For now, we'll send the available information
+      // For now, we'll send the available information with full transcript
     }
     
     // Send email with available data
-    if (name || email || transcriptSummary) {
+    if (name || email || analysis?.transcript_summary) {
       const msg = {
         to: process.env.NOTIFICATION_EMAIL,
         from: process.env.FROM_EMAIL,
@@ -164,7 +167,8 @@ export default async function handler(req, res) {
       });
     }
   } else {
-    // Handle other webhook types or legacy format
+    // Handle direct tool calls with lead data or legacy format
+    console.log('Handling direct tool call or legacy format');
     const {
       name,
       email,
@@ -178,27 +182,39 @@ export default async function handler(req, res) {
       name, email, phone, company, number_of_employees, industry_type
     });
 
-    const msg = {
-      to: process.env.NOTIFICATION_EMAIL,
-      from: process.env.FROM_EMAIL,
-      subject: 'New Lead Captured - Palgeo',
-      html: `
-        <h2>New Lead from Palgeo</h2>
-        <p><strong>Name:</strong> ${name}</p>
-        <p><strong>Email:</strong> ${email}</p>
-        <p><strong>Phone:</strong> ${phone}</p>
-        <p><strong>Company:</strong> ${company}</p>
-        <p><strong>Employees:</strong> ${number_of_employees}</p>
-        <p><strong>Industry:</strong> ${industry_type}</p>
-      `,
-    };
+    // Send email if we have at least name or email
+    if (name || email) {
+      const msg = {
+        to: process.env.NOTIFICATION_EMAIL,
+        from: process.env.FROM_EMAIL,
+        subject: 'New Lead Captured - Palgeo',
+        html: `
+          <h2>New Lead from Palgeo</h2>
+          <p><strong>Name:</strong> ${name || 'Not provided'}</p>
+          <p><strong>Email:</strong> ${email || 'Not provided'}</p>
+          <p><strong>Phone:</strong> ${phone || 'Not provided'}</p>
+          <p><strong>Company:</strong> ${company || 'Not provided'}</p>
+          <p><strong>Employees:</strong> ${number_of_employees || 'Not provided'}</p>
+          <p><strong>Industry:</strong> ${industry_type || 'Not provided'}</p>
+          <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+        `,
+      };
 
-    try {
-      await sgMail.send(msg);
-      return res.status(200).json({ message: 'Email sent successfully' });
-    } catch (error) {
-      console.error('SendGrid error:', error.response?.body || error.message);
-      return res.status(500).json({ error: 'Failed to send email' });
+      try {
+        await sgMail.send(msg);
+        return res.status(200).json({ 
+          message: 'Lead captured successfully',
+          success: true 
+        });
+      } catch (error) {
+        console.error('SendGrid error:', error.response?.body || error.message);
+        return res.status(500).json({ error: 'Failed to send email' });
+      }
+    } else {
+        return res.status(400).json({ 
+          error: 'Missing required lead data (name or email)',
+          received_data: body
+        });
+      }
     }
   }
-}
