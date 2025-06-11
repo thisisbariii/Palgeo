@@ -253,7 +253,7 @@ export default async function handler(req, res) {
     return handleDirectApiCall(rawBody, res);
   }
 
-  const secret = process.env.ELEVENLABS_SECRET;
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
   if (!verifyHmacSignature(signature, rawBody, secret)) {
     console.error('Invalid HMAC signature');
     return res.status(401).json({ error: 'Invalid signature' });
