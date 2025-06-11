@@ -37,19 +37,16 @@ export default async function handler(req, res) {
   const receivedSig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
   const expectedSig = expectedSignature;
 
-  // Use timing-safe comparison to prevent timing attacks
-  let isValid = false;
-  try {
-    isValid = crypto.timingSafeEqual(
-      Buffer.from(receivedSig, 'hex'), 
-      Buffer.from(expectedSig, 'hex')
-    );
-  } catch (error) {
-    console.error('Signature comparison error:', error);
-    return res.status(401).json({ error: 'Invalid signature format' });
+  // Check if signatures have the same length before comparison
+  if (receivedSig.length !== expectedSig.length) {
+    console.error('Signature length mismatch');
+    console.error('Received length:', receivedSig.length, 'signature:', receivedSig);
+    console.error('Expected length:', expectedSig.length, 'signature:', expectedSig);
+    return res.status(401).json({ error: 'Invalid signature' });
   }
 
-  if (!isValid) {
+  // Simple string comparison (signatures are hex strings)
+  if (receivedSig !== expectedSig) {
     console.error('Signature verification failed');
     console.error('Received:', receivedSig);
     console.error('Expected:', expectedSig);
