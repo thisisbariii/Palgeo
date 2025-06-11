@@ -221,7 +221,7 @@
 
 import { buffer } from 'micro';
 import crypto from 'crypto';
-const { Resend } = require('resend');
+import { Resend } from 'resend';
 
 export const config = {
   api: {
